@@ -1,0 +1,17 @@
+
+.black {
+    fill: black
+}
+
+.white {
+    fill: #F0F0F0;
+}
+
+.empty {
+    opacity: 0
+}
+
+.valid {
+    opacity: 0.3;
+    fill: black;
+}
