@@ -1,6 +1,5 @@
 var dx = 512 >> 3;
 var dy = dx;
-
 var width = dx * 8;
 var height = dy * 8;
 var game = {
@@ -12,13 +11,29 @@ var game = {
     }
 };
 
+
+var dim = Math.min($(window).width(), $(window).height());
+
+//d3.select('body').attr('width', dim).attr('height', dim);
+
 var svg = d3.select('body').append('svg:svg')
-        .attr('width', width)
-        .attr('height', height)
+    .attr('width', dim - 10)
+    .attr('height', dim - 10)
+    .attr('viewBox', '0,0,512,512')
 ;
 
+$(window).resize(function () {
+    console.log("resize: " + $(window).width() + ", " + $(window).height());
+    var dim = Math.min($(window).width(), $(window).height());
+//    dx = dim >> 3;
+//    dy = dx;
+//    width = dx * 8;
+//    height = dy * 8;
+    svg.attr('width', dim-10).attr('height', dim-10);
+    update();
+});
 var update = function () {
-
+    console.log("dx = " + dx + ", dy = " + dy);
     svg.selectAll('rect')
         .data(game.state.board)
         .enter().append('rect')
@@ -57,7 +72,7 @@ var update = function () {
                         url: 'games/' + game.id + '/queue/',
                         success: function (data) {
                         }
-                });
+                    });
                 }
             })
     ;
@@ -89,7 +104,6 @@ $.ajax({
                                     success: function (data) {
                                         if (typeof data === "object") {                                
                                             game.state = data;
-                                            console.log(data);
                                             update();
                                         }
                                     },
