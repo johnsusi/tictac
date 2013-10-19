@@ -27,10 +27,7 @@ function findValidMoves(board, player, opponent, empty) {
                     validate(x, y, -1,  0) +
                     validate(x, y, +1,  0);
 
-            if (flip > 0) {
-                validMoves.push(y * 8 + x);
-            }
-
+            if (flip > 0) validMoves.push(y * 8 + x);
         }
     }
     
