@@ -1,4 +1,7 @@
-reversi
+tictac
 =======
 
-http://reversi.susi.se/game.html
+http://tictac.susi.se/reversi.html
+=======
+
+

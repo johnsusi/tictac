@@ -1,161 +1,128 @@
-var fs = require('fs');
-eval(fs.readFileSync('./public/reversi.js').toString());
+/**
+ * 
+ * POST /games/                  Create new game
+ * POST /games/:id               Join created game
+ * GET  /games/:id               Get full game info including all state
+ * GET  /games/:id/states/latest Redirect to latest known game state
+ * GET  /games/:id/states/:state Get game state, will block for up to 30s
+ *                               if the state is not yet available.
+ * 
+ *
+ */
 
+var fs      = require('fs');
+var uuid    = require('node-uuid');
 var express = require('express');
-var app = express();
-
-var uuid = function () {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        var r = Math.random()*16|0,
-            v = c == 'x' ? r : (r&0x3|0x8);
-        return v.toString(16);
-    });
-};
-
+var app     = express();
 
 var games = {};
 var pollers = [];
 
+var oneDayInSeconds = 60 * 60 * 24;
+var oneYearInSeconds = oneDayInSeconds * 365;
+
 app.use(express.logger());
-app.use(express.bodyParser());
+app.use(express.json());
+app.use(express.urlencoded());
 app.use(express.static(__dirname + '/public'));
 
-app.get('/', function (request, response) {
-	response.send("Hello World!");
+app.get('/', function (req, res) {
+	return res.send("Hello World!");
 });
 
 app.get('/games/', function (req, res) {
-    res.json(games);
+    return res.json(games);
+});
+
+app.all('/games/:id*', function (req, res, next) {
+	if (!(req.params.id in games)) return res.send(404, 'Game not found');
+	return next();
 });
 
 app.get('/games/:id', function (req, res) {
-
-    if (req.params.id in games) {
-        res.json(games[req.params.id]);
-    }
-    else {
-        res.statusCode = 404;
-        return res.send('Error 404: Game not found');
-    }
+    return res.json(games[req.params.id]);
 });
 
 app.post('/games/', function (req, res) {
 
     var user = {
-        id: uuid(),
-        color: 'O'
-    };
+        id: uuid.v4()
+	};
 
     var game = {
-        id: uuid(),
+        id: uuid.v4(),
         players: [
             { name: req.body.name, user: user }
         ],
-        state: {
-            board: [
-                '.', '.', '.', '.', '.', '.', '.', '.',
-                '.', '.', '.', '.', '.', '.', '.', '.',
-                '.', '.', '.', '.', '.', '.', '.', '.',
-                '.', '.', '.', '*', 'O', '.', '.', '.',
-                '.', '.', '.', 'O', '*', '.', '.', '.',
-                '.', '.', '.', '.', '.', '.', '.', '.',
-                '.', '.', '.', '.', '.', '.', '.', '.',
-                '.', '.', '.', '.', '.', '.', '.', '.',
-            ],
-            player: 0,
-            nextState: 1
-        },
-        history: [],
-        queue: []
-    };
-    
-    game.state.validMoves = findValidMoves(game.state.board, 'O', '*', '.');
-    game.history.push(game.state);
+        states: [ req.body.state ]            
+	};
     
     games[game.id] = game;
     
-    res.json({
+    return res.json({
         id: game.id,
-        you: user
+        you: user.id
     });
 });
 
 app.post('/games/:id/players/', function (req, res) {
-    if (req.params.id in games) {
-        var game = games[req.params.id];
+
+    var game = games[req.params.id];
         
-        if (game.players.length > 2) {
-            res.statusCode = 400;
-            return res.send('Error 400: This game does not allow any more players to join');
-        }
+    if (game.players.length >= 2) return res.send(403, 'Game is full');
         
-        var user = {
-            id: uuid(),
-            color: game.players[0].user.color == 'O' ? '*' : 'O'
-        };
+    var user = {
+		id: uuid.v4(),
+	};
         
-        game.players.push({
-            name: req.body.name,
-            user: user
-        });
+    game.players.push({
+        name: req.body.name,
+        user: user
+    });
                 
-        res.json(user);
-    }
-    else {
-        res.statusCode = 404;
-        return res.send('Error 404: Game not found');
-    }
+    return res.json({
+		id: game.id, 
+		you: user.id
+	});
 
 });
 
-app.get('/games/:id/state/:state', function (req, res) {
-    if (req.params.id in games) {
-        var game = games[req.params.id];
-        if (req.params.state < game.history.length ) {
-            res.json(game.history[req.params.state]);
-        }
-        else {
-            pollers.push({
-                res: res,
-                game: game,
-                state: req.params.state,
-                timestamp: new Date().getTime()
-            });
-        }
-
-    }
-    else {
-        res.statusCode = 404;
-        return res.send('Error 404: Game not found');
-    }
+app.get('/games/:id/states/latest', function (req, res) { 
+  	var game = games[req.params.id];
+	return res.redirect(302, '' + (game.history.length-1));
 });
 
+app.get('/games/:id/states/:state', function (req, res) {
+ 
+    var game = games[req.params.id];
+	
+	// Comment out to disable long-polling
+	if (req.params.state >= game.states.length ) {
+        return pollers.push({
+            res: res,
+            game: game,
+            state: req.params.state,
+            timestamp: new Date().getTime()
+        });
+    }
 
-app.post('/games/:id/queue', function (req, res) {
-    
-    if (req.params.id in games) {
-        games[req.params.id].queue.push(req.body);
-        res.json(true);
-    }
-    else {
-        res.statusCode = 404;
-        return res.send('Error 404: Game not found');
-    }
-    
+	return res
+			.header('Cache-Control', 'public, max-age=3600')
+			.json(game.states[req.params.state]);
+
+});
+
+app.post('/games/:id/states/', function (req, res) {
+	
+	var game = games[req.params.id];
+	game.states.push(req.body);	
+	return res.json(game.states.length);
 });
 
 app.delete('/games/:id', function (req, res) {
 
-    if (req.params.id in games) {
-        delete games[req.params.id];
-        res.json(true);
-    }
-    else {
-        res.statusCode = 404;
-        return res.send('Error 404: Game not found');
-    }
-
-
+	delete games[req.params.id];
+  	return res.json(true);
 });
 
 var port = process.env.PORT || 5000;
@@ -167,74 +134,16 @@ app.listen(port, function() {
 
 (function processQueues() {
 
-	var expiration = new Date().getTime() - 30000;
-    for (var gameid in games) {
-    
-        var game = games[gameid];
-
-        while (game.queue.length > 0) {
-            var cmd = game.queue.shift();
-            var board = game.state.board.join(",").split(","), validMoves, player;
-            var move = typeof cmd.move == "number" ? cmd.move | 0 : parseInt(cmd.move);
-
-            if (game.state.validMoves.indexOf(move) == -1 || cmd.me !=
-            game.players[game.state.player].user.id
-            
-            ) {
-                game.state["error"] = "Player tried to do an invalid move";
-                validMoves = game.state.validMoves;
-                player = game.state.player;
-                console.log("error");
-            }
-            else {
-                var p = game.players[game.state.player].user.color;
-                var o = p == 'O' ? '*' : 'O';
-                doMove(board, cmd.move % 8, cmd.move >> 3, p, o, '.');
-                validMoves = findValidMoves(board, o, p, '.');
-                player = (game.state.player + 1) % game.players.length;
-            }
-            game.state = {
-                board: board,
-                validMoves: validMoves,
-                player: player,
-                nextState: game.history.length +1
-            };
-            game.history.push(game.state);
- 
-            if (game.state.validMoves.length == 0) {
-                var p = game.players[game.state.player].user.color;
-                var o = p == 'O' ? '*' : 'O';
-                board = game.state.board.join(",").split(",");
-                player = (game.state.player + 1) % game.players.length;
-                validMoves = findValidMoves(board, o, p, '.');
- 
-                if (validMoves.length == 0) {
-                    // game is done
-                }
-                else {
-                    game.state = {
-                        board: board,
-                        validMoves: validMoves,
-                        player: player,
-                        nextState: game.history.length +1
-                    };
-                    game.history.push(game.state);
-                }
-            }
- 
-        }
-        
-    }
-    
+	var expiration = new Date().getTime() - 30000; // 30s
+   
     pollers = pollers.filter(function (poller) {
     
-        if (poller.state < poller.game.history.length) {
-            poller.res.json(poller.game.history[poller.state]);
+        if (poller.state < poller.game.states.length) {
+            poller.res.json(poller.game.states[poller.state]);
             return false;
         }
         else if (poller.timestamp < expiration) {
-            poller.res.statusCode = 200;
-            poller.res.send("OK");
+			poller.res.send(200, 'OK');
             return false;
         }
         else return true;
@@ -243,3 +152,4 @@ app.listen(port, function() {
 
     setTimeout(processQueues, 10);
 })();
+

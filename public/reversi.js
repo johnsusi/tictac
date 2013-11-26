@@ -51,7 +51,8 @@ var update = function () {
     ;
 
 
-    var circles = svg.selectAll('circle').data(game.state.board);
+    var circles = svg.selectAll('circle').data(game.states.board);
+	var validMoves = findValidMoves(game.states.
 
     circles.enter().append('circle')
             .attr('cx', function (d, i) { return dx / 2 + (i %  8) * dx; })
@@ -62,9 +63,9 @@ var update = function () {
     circles .classed('black', function (d) { return d == '*'; })
             .classed('white', function (d) { return d == 'O'; })
             .classed('empty', function (d) { return d == '.'; })
-            .classed('valid', function (d, i) { return d == '.' && game.state.validMoves.indexOf(i) != -1; })
+            .classed('valid', function (d, i) { return d == '.' && game.states.validMoves.indexOf(i) != -1; })
             .on('click', function (d, i) {
-                if (game.state.validMoves.indexOf(i) != -1) {
+                if (game.states.validMoves.indexOf(i) != -1) {
                     $.ajax({
                         type: 'POST',
                         data: { move: i, me: game.state.player == 0 ? game.me.id : game.you.id},
@@ -92,7 +93,23 @@ $.ajax({
        
             $.ajax({
                     type: 'POST',
-                    data: { name: "I am black" },
+                    data: { 
+							name: "I am black",
+				            state: {
+									board: [
+          		'.', '.', '.', '.', '.', '.', '.', '.',
+                '.', '.', '.', '.', '.', '.', '.', '.',
+                '.', '.', '.', '.', '.', '.', '.', '.',
+                '.', '.', '.', '*', 'O', '.', '.', '.',
+                '.', '.', '.', 'O', '*', '.', '.', '.',
+                '.', '.', '.', '.', '.', '.', '.', '.',
+                '.', '.', '.', '.', '.', '.', '.', '.',
+                '.', '.', '.', '.', '.', '.', '.', '.',
+						            ],
+						            player: 0,
+						            nextState: 1
+							}
+					},
                     dataType: 'json',
                     url: 'games/' + game.id + '/players/',
                     success: function (data) {
@@ -100,7 +117,7 @@ $.ajax({
                         (function poll() {
                             $.ajax({
                                     type: 'GET',
-                                    url: 'games/' + game.id + '/state/' + game.state.nextState,
+                                    url: 'games/' + game.id + '/states/' + game.state.nextState,
                                     success: function (data) {
                                         if (typeof data === "object") {                                
                                             game.state = data;
@@ -120,4 +137,74 @@ $.ajax({
 });
 
 
+
+function findValidMoves(board, player, opponent, empty) {
+
+    var validMoves = [];
+    
+    var validate = function (x, y, dx, dy) {
+        for (var xx = x + dx, yy = y + dy, flip = 0;
+                xx >= 0 && xx <  8 &&
+                yy >= 0 && yy < 8;xx += dx, yy += dy) {        
+            if (board[yy * 8 + xx] == opponent) ++flip;
+            else if (board[yy * 8 + xx] == player) return flip;
+            else return 0;
+            
+        }
+        return 0;
+    };
+    
+    for (var y = 0;y < 8;++y) {
+        for (var x = 0;x < 8;++x) {
+            if (board[y * 8 + x] != empty) continue;
+            var flip =
+                    validate(x, y,  0, -1) +
+                    validate(x, y,  0, +1) +
+                    validate(x, y, +1, -1) +
+                    validate(x, y, +1, +1) +
+                    validate(x, y, -1, -1) +
+                    validate(x, y, -1, +1) +
+                    validate(x, y, -1,  0) +
+                    validate(x, y, +1,  0);
+
+            if (flip > 0) validMoves.push(y * 8 + x);
+        }
+    }
+    
+    return validMoves;
+
+}
+
+function doMove(board, x, y, player, opponent, empty) {
+    
+    var flip = function (x, y, dx, dy) {
+        for (var xx = x + dx, yy = y + dy, flip = 0;
+                xx >= 0 && xx <  8 &&
+                yy >= 0 && yy < 8;xx += dx, yy += dy) {        
+            if (board[yy * 8 + xx] == opponent) ++flip;
+            else if (board[yy * 8 + xx] == player) {
+                if (flip > 0) {
+                    do {
+                        xx -= dx;
+                        yy -= dy;
+                        board[yy * 8 + xx] = player;
+                    } while (xx != x || yy != y);
+                }
+                return;
+            }
+            else return;
+        }
+    };
+    
+
+    flip(x, y,  0, -1);
+    flip(x, y,  0, +1);
+    flip(x, y, +1, -1);
+    flip(x, y, +1, +1);
+    flip(x, y, -1, -1);
+    flip(x, y, -1, +1);
+    flip(x, y, -1,  0);
+    flip(x, y, +1,  0);
+    
+}
 
