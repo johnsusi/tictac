@@ -1,5 +1,5 @@
-tictac
+Tic-Toc
 =======
 
-http://tictac.susi.se/reversi.html
+http://tictoc.susi.se/reversi.html
 
