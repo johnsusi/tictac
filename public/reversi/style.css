@@ -4,25 +4,30 @@ html, body {
 }
 
 svg {
-    padding: 5px 5px 5px 5px;
+    padding: 0 0 0 0;
     margin: 0 0 0 0;
-}
-
-.black {
-    fill: black
-}
-
-.white {
-    fill: #F0F0F0;
-}
-
-.empty {
-    opacity: 0
 }
 
 .valid {
     opacity: 0.3;
-    fill: black;
 }
 
+.axis .domain {
+	display: none;
+}	
 
+.bottom .tick text {
+    -moz-transform: matrix(1, 0, 0, -1, 0, 0);
+    -webkit-transform: matrix(1, 0, 0, -1, 0, 0);
+    -o-transform:matrix(1, 0, 0, -1, 0, 0);
+	transform:matrix(1, 0, 0, -1, 0, 0);
+
+}
+
+.right .tick text {
+    -moz-transform: matrix(1, 0, 0, -1, 0, 0);
+    -webkit-transform: matrix(1, 0, 0, -1, 0, 0);
+    -o-transform:matrix(1, 0, 0, -1, 0, 0);
+	transform:matrix(1, 0, 0, -1, 0, 0);
+
+}
