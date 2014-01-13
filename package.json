@@ -10,7 +10,9 @@
 	],
 	"dependencies": {
 		"express": "3.x",
+		"hiredis": "0.x",
 		"node-uuid": "1.x",
+		"redis": "0.x",
 		"rethinkdb": "1.x",
 		"sugar": "1.x"
 	},
