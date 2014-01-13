@@ -11,15 +11,39 @@
  */
 
 var fs      = require('fs');
-var uuid    = require('node-uuid');
+var util    = require('util');
 
-var metrics = require('librato-metrics').createClient({
+var uuid    = require('node-uuid');
+var redis   = require('redis').createClient();
+
+if (process.env.REDISTOGO_URL) {
+	var rtg   = require("url").parse(process.env.REDISTOGO_URL);
+	var redis = require("redis").createClient(rtg.port, rtg.hostname);
+	redis.auth(rtg.auth.split(":")[1]);
+} 
+else {
+    var redis = require("redis").createClient();
+}
+
+redis.on('error', console.log );
+
+var librato = require('librato-metrics').createClient({
 	email: 'john@susi.se',
 	token: 'd21cf722053c202911f3c8f354928989ffdfb5eef834f6c19fcdfc25a206800f'
 });
 
 var express = require('express');
+var cons    = require('consolidate');
 var app     = express();
+
+var mailer = require("nodemailer").createTransport("SMTP",{
+	service: "Mandrill",
+	auth: {
+		user: "app18067457@heroku.com",
+		pass: "yBTS-b-gpMqYKR87NiUHrQ"
+	}
+});
+
 
 var crypto = require('crypto');
 var nacl_factory = require("js-nacl");
@@ -27,12 +51,18 @@ var nacl = nacl_factory.instantiate();
 
 require('sugar');
 
+app.engine('html', cons.underscore);
+app.set('view engine', 'html');
+app.set('views', __dirname + '/view');
+
+
 var games = {};
 var pollers = [];
 var lobby = {};
 
 var oneDayInSeconds = 60 * 60 * 24;
 var oneYearInSeconds = oneDayInSeconds * 365;
+
 
 app.use(express.logger());
 app.use(express.json({
@@ -46,55 +76,182 @@ app.use(express.json({
 app.use(express.urlencoded());
 app.use(express.static(__dirname + '/public'));
 
-var secrets = {
-
-	'hello': 'world'
+var stats = {
+	requests: 0
 };
 
-function authenticate(req, res, next) {
+app.all('*', function (req, res, next) {
+	stats.requests++;
+	next();
+});
 
-	console.log(authenticate);
+var secrets = (function () {
 
-	var authorization = req.get('Authorization');
-
-	if (!authorization) return res.set('WWW-Authenticate', 'TicToc').send(401);
-
-	console.log(authorization);
-	var l = authorization.match(/TicToc ([^:]*):(.*)/);
-	console.log(l);
-	if (!l || l.length != 3) return res.set('WWW-Authenticate', 'TicToc').send(401);
-
-	var keyid     = l[1];
-	var signature = l[2];
-
-	console.log(keyid + ' => ' + signature);
-
-	if (!(keyid in secrets)) return res.set('WWW-Authenticate', 'TicToc')
-			.send(401, 'Key not registered');
-
-	if (!('rawBody' in req)) return res.send(400, 'Missing body');
-	 
-	var hmacsha1 = crypto.createHmac('sha1', secrets[keyid]);
-	hmacsha1.update(req.rawBody);
-	
-	if (signature !== hmacsha1.digest('base64')) return res.set('WWW-Authenticate', 'TicToc')
-			.send(401, 'Signature does not match');
+	var keys = {},
+		pending = {};
 
 
-	return next();
+	redis.hgetall('secrets.keys', function (err, value) {
+		if (err) console.log(err);
+		else keys = value || {};
+		console.log(value);
+	});
+	redis.hgetall('secrets.pending', function (err, value) {
+		if (err) console.log(err);
+		else pending = value || {};
+		console.log(value);
+	});
+
+	function authenticate(key, body, signature) {
+		var hmacsha1 = crypto.createHmac('sha1', key);
+		hmacsha1.update(body);
+		var ns = hmacsha1.digest('base64');
+		console.log(signature + ' = ' + ns);
+		return signature === ns; // hmacsha1.digest('base64');
+	}
+
+	return {
+		add: function (keyid, secret, pincode) {
+			var entry = pending[keyid] = {
+				keyid: keyid,
+				secret: secret,
+				pincode: pincode
+			};
+			var redis_key = 'tictac:secret:' + keyid;
+			redis.set(redis_key, JSON.stringify(entry));
+			redis.sadd('tictac:pending', redis_key);
+		},
+		get: function (keyid) {
+			if (!(keyid in keys)) {
+				console.log('missing key');
+				if (keyid in pending) console.log('key is pending');
+			}
+			return keys[keyid];
+		},
+		verify: function (keyid, data, pincode, signature) {
+			var entry = pending[keyid];
+			if (!entry) return false;
+			var secret = entry.secret;
+
+			console.log(pincode);
+			console.log(secret);
+
+			if (!authenticate(secret, data, signature)) return false;
+			if (pincode != entry.pincode) return false;
+			keys[keyid] = secret;
+			var redis_key = 'tictac:secret:' + keyid;
+			redis.hmset(redis_key, JSON.stringify(entry));
+			redis.move('tictac:pending', 'tictac:secrets', redis_key);
+			
+			return true;
+		},		
+		authenticate: authenticate,
+		pending: function (keyid) {
+			return keyid in pending;
+		}
+	};
+
+
+})();
+
+function authenticate(verify) {
+	return function (req, res, next) {
+
+		console.log(authenticate);
+
+		var authorization = req.get('Authorization');
+
+		console.log(authorization);
+		if (!authorization) return res.set('WWW-Authenticate', 'TicTac').send(401);
+
+		var l = authorization.match(/TicToc ([^:]*):(.*)/);
+		if (!l || l.length != 3) return res
+				.set('WWW-Authenticate', 'TicToc')
+				.send(401);
+
+		var keyid     = l[1];
+		var signature = l[2];
+
+		console.log(keyid);
+		console.log(signature);
+
+		console.log(req.body);
+		if (!('rawBody' in req)) return res.send(400);	
+
+		if (verify) {
+			
+			
+			if (!secrets.verify(keyid, req.rawBody, req.body.pincode, signature)) return res
+					.set('WWW-Authenticate', 'TicTac')
+					.send(401);
+			return res.send(204);
+		}
+		else {
+
+			var key = secrets.get(keyid);
+			
+			if (!key) return secrets.pending(keyid) ? 
+					res.redirect('/verify.html') : 
+					res.set('WWW-Authenticate', 'TicTac').send(401);
+			
+			console.log('key is valid');
+			return !secret.authenticate(key, req.rawBody, signature) ?
+					res.set('WWW-Authenticate', 'TicTac').send(401) : 
+					next();
+		}
+	};
 
 }
 
-app.post('*', authenticate);
-app.put('*', authenticate);
-app.delete('*', authenticate);
+app.get('/verify.html', function (req, res) {
+	return res.render('verify.html', {
+		uid: 'u-' + new Date().getTime(), 
+		url: req.originalUrl 
+	});
+});
 
-app.post('/verify-auth', function (req, res) {
+app.post('/verify', authenticate(true));
 
+//app.post('*', authenticate(false));
+//app.put('*', authenticate(false));
+//app.delete('*', authenticate(false));
 
-	console.log(req.get('Authorization'));
-	console.log(req.get('Content-Length'));
+app.get('/register.html', function (req, res) {
 
+	res.render('register.html', { 
+		uid: 'u-' + new Date().getTime(), 
+		url: req.originalUrl 
+	});
+});
+
+app.get('/register', function (req, res) {
+
+	var name = req.param('name');
+	var email = req.param('email');
+
+	if (!email) return res.send(503, 'Missing required field: email');
+
+	var keyid   = crypto.randomBytes(12).toString('base64');
+	var secret  = crypto.randomBytes(24).toString('base64');
+	var pincode = Math.floor(Math.random() * 100000); 
+
+	secrets.add(keyid, secret, pincode);
+
+	mailer.sendMail({
+		to: name + '<' + email + '>', 	
+		headers: {
+			'X-MC-Template': 'tictac',
+			'X-MC-MergeVars': {'pincode': pincode }
+		}
+	
+	}, function (error, response) {
+		if (error) console.log(error);
+	});
+
+	return res.json({
+		keyid: keyid,
+		secret: secret
+	});
 
 });
 
@@ -103,7 +260,7 @@ app.get('/', function (req, res) {
 	return res.send("Hello World!");
 });
 
-app.get('/lobby', function (req, res) {
+app.get('/lobby/', function (req, res) {
 	return res.json(lobby);
 });
 
@@ -115,7 +272,7 @@ function expired204(res, timeout) {
 			return true;
 		}
 		else return false;
-	}
+	};
 }
 
 app.put('/lobby/:id', function (req, res) {
@@ -281,37 +438,49 @@ app.delete('/games/:id', function (req, res) {
   	return res.send(204);
 });
 
-var port = process.env.PORT || 5000;
+(function start() { 
 
-app.listen(port, function() {
-	console.log("Listening on " + port);
-});
+	var port = process.env.PORT || 5000;
 
-
-(function processQueues() {
-
-	var expiration = new Date().getTime() - 30000; // 30s
-   
-    pollers = pollers.filter(function (poller) {  
-		if (poller.completed() || poller.expired()) {
-			if ('cleanup' in poller) poller.cleanup();
-			return false;
-		}
-		else return true;
+	app.listen(port, function() {
+		console.log("Listening on " + port);
 	});
-    setTimeout(processQueues, 1000);
-})();
 
-(function sendMetrics() {
 
-	metrics.post('/metrics', {
+	(function processQueues() {
 
-		gauges: [
-			{ name: 'tictoc.pollers', value: pollers.length }
-		]
+		var expiration = new Date().getTime() - 30000; // 30s
+   
+	    pollers = pollers.filter(function (poller) {  
+			if (poller.completed() || poller.expired()) {
+				if ('cleanup' in poller) poller.cleanup();
+				return false;
+			}
+			else return true;
+		});
+    	setTimeout(processQueues, 1000);
+	})();
+
+	(function sendMetrics() {
+
+
+		var mem = process.memoryUsage();
+		librato.post('/metrics', {
+
+			gauges: [
+				{ name: 'tictac.requests', value: stats.requests},
+				{ name: 'tictac.pollers', value: pollers.length },
+				{ name: 'tictac.rss', value: mem.rss },
+				{ name: 'tictac.heapTotal', value: mem.heapTotal },
+				{ name: 'tictac.heapUsed', value: mem.heapUsed }
+			]
 		
-	}, function() {});
+		}, function() {});
 
-	setTimeout(sendMetrics, 60000);
+		stats.requests = 0;
+
+		setTimeout(sendMetrics, 90000);
+
+	})();
 
 })();
